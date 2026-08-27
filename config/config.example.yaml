@@ -1,33 +1,43 @@
-# hv2pve controller example configuration.
-# The current CLI accepts flags directly; this file documents the intended
-# persistent settings for the next configuration-loader revision.
 workspace: /migrate
 state_dir: /migrate/state
 incoming_dir: /migrate/incoming
 sync_dir: /migrate/sync
 log_dir: /migrate/logs
 
+hyperv:
+  host: hyperv01
+  transport: winrm
+  checkpoint_consistency: application
+
 proxmox:
   host: 10.20.99.37
   user: root
-  storage: ceph-vm
   identity_file: /home/ubuntu/.ssh/hv2pve_pve
-
-network:
-  # MUST be an isolated/non-production Proxmox bridge or SDN VNet.
-  # Do not substitute vlan60 here unless vlan60 has deliberately been made
-  # isolated, which it is not in the current lab design.
+  storage: ceph-vm
+  efi_storage: ceph-vm
   test_vnet: REQUIRED_ISOLATED_VNET
-  # Production network is migration-specific. Example only:
-  production_vnet: vlan60
+  # Never set this equal to test_vnet. The correct production VNet is
+  # migration-specific and must match the source VM's intended network.
+  production_vnet: REQUIRED_SOURCE_PRODUCTION_VNET
 
-source:
-  transport: scp
-  hyperv_host: REQUIRED_HYPERV_HOST
+transfer:
+  method: rsync
+  bandwidth_limit_mbps: null
+  partial: true
 
-safety:
+validation:
   require_isolated_test: true
-  require_verified_sync_before_cutover: true
+  require_last_sync: true
+  require_guest_boot: true
+  require_application: false
+
+cutover:
+  source_shutdown_timeout_seconds: 300
+  rollback_window_minutes: 60
   require_exact_vm_name_confirmation: true
-  force_power_off_source: false
-  delete_source_automatically: false
+
+native_rct:
+  enabled: false
+  helper_path: C:\hv2pve\Hv2Pve.Rct.exe
+  require_wmi_native_range_comparison: true
+  require_explicit_frozen_disk_path: true
