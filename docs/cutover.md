@@ -1,49 +1,52 @@
-# Cutover safety model
-
-Cutover is the only phase in which the source VM is intentionally stopped and the destination is allowed onto the production network.
+# Cutover and rollback
 
 ## Preconditions
 
-A future automated cutover command must refuse to run unless all of the following are true:
+`authorize-cutover` refuses unless:
 
-- migration state is at least `TESTED`
-- the destination VM ID is recorded
-- an isolated destination boot has completed successfully
-- disk mappings are unambiguous
-- the latest synchronization completed successfully
-- source and destination network identities are known
-- an operator explicitly confirms source shutdown
+- destination passed an isolated test boot
+- latest sync is verified
+- an authoritative Hyper-V reference point is recorded
+- destination is recorded powered off
+- phase is CUTOVER_READY
 
-## Sequence
+The operator must also type the exact source VM name.
 
-```text
-validate preconditions
-        ↓
-quiesce source guest
-        ↓
-stop Hyper-V VM
-        ↓
-confirm source is OFF
-        ↓
-final changed-block synchronization
-        ↓
-validate destination disks
-        ↓
-move/connect destination NIC to production VNet
-        ↓
-start Proxmox VM
-        ↓
-service validation
-```
+## Source stop
 
-## Failure before destination start
+Run `hyperv/scripts/cutover-source.ps1`. It requests a guest shutdown and waits. If the guest does not shut down, it fails rather than automatically issuing a hard power-off.
 
-If any operation fails before the destination is started on the production network, the default recovery action is to keep the destination isolated and return the source VM to service.
+## Final synchronization
 
-## Failure after destination start
+After source stop:
 
-If validation fails after the destination has accepted production writes, rollback becomes a divergence decision. The tool must make this explicit rather than quietly starting the old VM and creating split brain.
+- record the source stopped in controller state
+- create/capture the final sync
+- apply/verify final destination data
+- mark final sync verified
 
-## Source retention
+Only then can production activation occur.
 
-The source VM is never deleted automatically. After successful cutover it remains powered off for the operator-defined rollback window.
+## Production activation
+
+The controller changes `net0` from the isolated test VNet to the production VNet while preserving model/MAC/other options, then starts the destination.
+
+Complete cutover requires explicit validation of:
+
+- network identity
+- guest boot
+- application behavior
+
+## Rollback
+
+Rollback is deliberately asymmetric because data may have diverged after cutover.
+
+`begin-rollback`:
+
+1. stops Proxmox destination
+2. moves its NIC back to test VNet
+3. records ROLLBACK_IN_PROGRESS
+
+Only then should `start-source-rollback.ps1` restart the Hyper-V source.
+
+After validation, `mark-rolled-back` records the result. Any writes accepted by the Proxmox VM between cutover and rollback must be treated as divergent data.

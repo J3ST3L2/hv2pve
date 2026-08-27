@@ -1,88 +1,70 @@
-# First lab quickstart
+# First lab migration quickstart
 
-This is the initial safe test path. It stops before Proxmox import and does not implement RCT yet.
+This is a proof workflow for a disposable VM. Do not make the first run a domain controller, storage server, or anything whose disappearance would generate a meeting.
 
-## Hyper-V host prerequisites
+## Hyper-V host
 
-Run PowerShell as Administrator on the Hyper-V host.
-
-```powershell
-Get-Module -ListAvailable Hyper-V
-Get-VM | Select-Object Name, State, Generation, CheckpointType
-```
-
-Choose a disposable test VM for the first migration.
-
-## Clone the repository
+Open elevated PowerShell:
 
 ```powershell
-git clone https://github.com/J3ST3L2/hv2pve.git
-cd hv2pve
-```
+git clone https://github.com/J3ST3L2/hv2pve.git C:\hv2pve
+cd C:\hv2pve
 
-If Git is not installed, download the repository ZIP from GitHub for the first lab test. Git is preferable once development becomes iterative.
-
-## Discover a VM
-
-```powershell
 .\hyperv\scripts\discover.ps1 `
   -VMName 'TEST-VM' `
-  -OutputPath C:\hv2pve\discovery.json
+  -OutputPath C:\hv2pve-work\discovery.json
 ```
 
-Review the JSON before creating any checkpoint.
-
-The discovery output should include:
-
-- VM ID
-- generation
-- power state
-- configured checkpoint type
-- virtual disks
-- virtual switches/VLAN information
-- existing checkpoints
-
-## Check checkpoint policy
-
-`hv2pve` currently requires the VM checkpoint type to be `Production` or `ProductionOnly` before baseline creation.
-
-Inspect it:
+Review the JSON. Then create the RCT baseline:
 
 ```powershell
-Get-VM -Name 'TEST-VM' | Select-Object Name, CheckpointType
-```
-
-For a lab VM, if you explicitly want production checkpoints to fail rather than fall back to standard checkpoints:
-
-```powershell
-Set-VM -Name 'TEST-VM' -CheckpointType ProductionOnly
-```
-
-That setting is not changed automatically by hv2pve.
-
-## Create/export the baseline
-
-Choose a disk with enough free capacity for the exported checkpoint.
-
-```powershell
-.\hyperv\scripts\baseline.ps1 `
+.\hyperv\scripts\rct-baseline.ps1 `
   -VMName 'TEST-VM' `
-  -DestinationPath 'D:\hv2pve-exports' `
-  -StatePath 'C:\hv2pve\migration-state.json'
+  -DestinationPath C:\hv2pve-work\export `
+  -StatePath C:\hv2pve-work\migration-state.json
 ```
 
-Expected result:
+The VM should remain online. Record the `migration_id` and authoritative reference point from the state file.
 
-- source VM remains available
-- an `hv2pve-*` production checkpoint exists
-- the checkpoint is exported under the migration ID
-- migration state is written as JSON
-- phase is `BASELINE_READY`
+## Transfer to appliance
 
-## Stop here for the first test
+Copy the baseline export and state to `/migrate/incoming/<migration-id>/` on hv2pve01. `send-artifact.ps1` is provided when Windows OpenSSH client is available.
 
-Do not manually merge/delete the migration checkpoint yet. The next development step consumes the baseline on the Linux migration appliance and builds an isolated Proxmox destination.
+## Controller
 
-## Important
+```bash
+STATE=/migrate/state/test-vm.json
+hv2pve ingest-baseline \
+  --input /migrate/incoming/MIGRATION-ID/migration-state.json \
+  --state "$STATE"
 
-Incremental synchronization is deliberately unavailable at this stage. The project will add proper Hyper-V RCT/reference-point handling after the baseline path is validated.
+hv2pve validate-state --state "$STATE"
+hv2pve status --state "$STATE"
+```
+
+## Create/select an isolated VNet
+
+Do not use the production VNet. The existing lab `vlan60` is the Servers production network, so a separate test/quarantine VNet is required before destination boot.
+
+## Seed
+
+```bash
+hv2pve seed-plan \
+  --state "$STATE" \
+  --storage ceph-vm \
+  --test-vnet YOUR_ISOLATED_VNET
+```
+
+After review:
+
+```bash
+hv2pve seed \
+  --state "$STATE" \
+  --storage ceph-vm \
+  --test-vnet YOUR_ISOLATED_VNET \
+  --production-vnet SOURCE_PRODUCTION_VNET \
+  --pve-host 10.20.99.37 \
+  --identity-file ~/.ssh/hv2pve_pve
+```
+
+Then use `test-start`, validate, `test-stop`, and `mark-tested` as documented in the runbook.

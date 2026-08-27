@@ -3,38 +3,57 @@
   "$id": "https://github.com/J3ST3L2/hv2pve/schemas/migration-state.schema.json",
   "title": "hv2pve migration state",
   "type": "object",
-  "required": ["schema_version", "migration_id", "phase", "source", "baseline", "destination", "sync"],
+  "required": ["schema_version", "migration_id", "phase", "source", "baseline", "destination", "sync", "validation", "cutover", "history"],
   "properties": {
-    "schema_version": {"type": "integer", "const": 1},
+    "schema_version": {"const": 2},
     "migration_id": {"type": "string", "minLength": 1},
     "phase": {
-      "type": "string",
-      "enum": [
-        "NEW",
-        "DISCOVERED",
-        "BASELINE_READY",
-        "SEEDED",
-        "TESTED",
-        "SYNCING",
-        "CUTOVER_READY",
-        "CUTOVER_IN_PROGRESS",
-        "CUTOVER_COMPLETE",
-        "ROLLED_BACK",
-        "CLOSED"
-      ]
+      "enum": ["NEW", "DISCOVERED", "BASELINE_READY", "SEEDED", "TESTED", "SYNCING", "CUTOVER_READY", "CUTOVER_IN_PROGRESS", "CUTOVER_COMPLETE", "ROLLBACK_IN_PROGRESS", "ROLLED_BACK", "CLOSED", "FAILED"]
     },
-    "source": {"type": "object"},
+    "source": {
+      "type": "object",
+      "properties": {
+        "computer_name": {"type": ["string", "null"]},
+        "vm_name": {"type": ["string", "null"]},
+        "vm_id": {"type": ["string", "null"]},
+        "state": {"type": ["string", "null"]},
+        "generation": {"type": ["integer", "null"]},
+        "disks": {"type": "array"},
+        "networks": {"type": "array"}
+      }
+    },
     "baseline": {"type": "object"},
-    "destination": {"type": "object"},
+    "destination": {
+      "type": "object",
+      "required": ["proxmox_node", "proxmox_vmid", "production_vnet", "test_vnet", "tested", "powered_on", "disk_map"],
+      "properties": {
+        "proxmox_node": {"type": ["string", "null"]},
+        "proxmox_vmid": {"type": ["integer", "null"]},
+        "production_vnet": {"type": ["string", "null"]},
+        "test_vnet": {"type": ["string", "null"]},
+        "tested": {"type": "boolean"},
+        "powered_on": {"type": "boolean"},
+        "disk_map": {"type": "object"}
+      }
+    },
     "sync": {
       "type": "object",
+      "required": ["mode", "rct_implemented", "authoritative_reference_point", "sequence"],
       "properties": {
         "mode": {"type": "string"},
         "rct_implemented": {"type": "boolean"},
-        "last_successful_sync_utc": {"type": ["string", "null"]}
+        "native_rct_acceleration": {"type": "boolean"},
+        "authoritative_reference_point": {"type": ["string", "null"]},
+        "pending_reference_point": {"type": ["string", "null"]},
+        "sequence": {"type": "integer", "minimum": 0},
+        "last_successful_sync_utc": {"type": ["string", "null"]},
+        "last_bundle": {"type": ["string", "null"]},
+        "disks": {"type": "object"}
       }
     },
     "validation": {"type": "object"},
+    "cutover": {"type": "object"},
+    "history": {"type": "array"},
     "created_at_utc": {"type": "string"},
     "updated_at_utc": {"type": "string"}
   },

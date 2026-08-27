@@ -1,99 +1,108 @@
 # Architecture
 
-## Objective
-
-`hv2pve` migrates Hyper-V virtual machines into Proxmox VE with a staged workflow intended to minimize outage time and preserve rollback options.
-
 ## Components
 
-### Hyper-V side
+### Hyper-V source component
 
-PowerShell runs on or against the Hyper-V host and is responsible for:
+Runs locally and elevated on the Hyper-V host. It owns operations that require local Hyper-V/WMI/Virtual Disk API access:
 
-- VM discovery and inventory
-- disk and virtual-switch discovery
-- production checkpoint creation
-- baseline export orchestration
-- reference-point/RCT operations once implemented
-- source quiesce/stop operations during cutover
+- VM discovery
+- RCT reference point creation
+- reference point export
+- change-range discovery
+- read-only virtual disk attachment
+- logical-range bundle generation
+- graceful source shutdown
+- old reference point cleanup only after destination commit
 
-The Hyper-V side must never silently delete a source VM or checkpoint that is still part of an active migration state.
+### hv2pve controller appliance
 
-### Migration controller
+Runs on Linux, currently `hv2pve01` in the lab. It owns:
 
-The Linux controller runs on the migration appliance and is responsible for:
+- durable migration state
+- transfer/staging
+- baseline seed
+- Proxmox VM construction
+- isolated test orchestration
+- delta bundle verification/application
+- cutover safety gates
+- production network activation
+- rollback isolation
 
-- migration state
-- invoking Hyper-V operations
-- transfer orchestration
-- image inspection/conversion
-- Proxmox destination creation/import
-- isolated test-boot orchestration
-- cutover state machine
-- validation and rollback guidance
+### Proxmox VE
 
-### Proxmox side
+The destination hypervisor stores the staged VM. A destination stays powered off except during an explicitly isolated test or after production cutover.
 
-Proxmox VE is the destination platform. Initial development targets:
-
-- Q35 machine type
-- OVMF/UEFI where appropriate
-- VirtIO networking/storage
-- Ceph-backed destination disks
-- SDN VNets for production and isolated test networking
-
-The generic VM-building mechanics remain in the companion Ansible repository. `hv2pve` should call stable interfaces rather than duplicate every infrastructure primitive.
-
-## Data path
-
-The preferred long-term path is to avoid staging complete copies twice:
-
-```text
-Hyper-V source
-    │
-    │ baseline / changed data
-    ▼
-hv2pve controller
-    │
-    │ streaming conversion / controlled staging
-    ▼
-Proxmox destination storage
-```
-
-A local `/migrate` workspace is still useful for manifests, metadata, logs, temporary chunks, and smaller migrations.
-
-## Migration state machine
+## State machine
 
 ```text
 NEW
- ↓
+ |
+ v
 DISCOVERED
- ↓
+ |
+ v
 BASELINE_READY
- ↓
+ |
+ v
 SEEDED
- ↓
+ |
+ v
 TESTED
- ↓
-SYNCING
- ↓
+ |
+ +----> SYNCING ----+
+ |                  |
+ +<-----------------+
+ |
+ v
 CUTOVER_READY
- ↓
+ |
+ v
 CUTOVER_IN_PROGRESS
- ↓
-CUTOVER_COMPLETE
- ↓
-CLOSED
+ |              |
+ v              v
+CUTOVER_COMPLETE   ROLLBACK_IN_PROGRESS
+ |                      |
+ v                      v
+CLOSED                ROLLED_BACK -> CLOSED
 ```
 
-Failure states do not automatically destroy source or destination assets. The state file records enough information to make cleanup deliberate.
+Illegal phase jumps are rejected by `controller/state.py`.
+
+## Data paths
+
+### Baseline
+
+The correctness-first baseline uses Hyper-V RCT reference point export. The export is transferred to the controller, then seeded into Proxmox.
+
+### Incremental WMI export
+
+A new RCT reference point is created with an existing authoritative reference point as the base. `ExportReferencePoint` is asked to export the new point relative to that base. The old base is retained until the destination has verified the new state.
+
+### Native RCT acceleration
+
+The Win32 `QueryChangesVirtualDisk` path is designed to avoid large WMI exports:
+
+1. Seal/identify a stable Hyper-V reference point.
+2. Query logical ranges changed since the previous RCT ID.
+3. Attach the frozen VHD/VHDX read-only.
+4. Read the changed ranges from the attached logical disk device.
+5. Hash and package each range.
+6. Transfer bundle metadata + payload.
+7. Stop the destination.
+8. Map its destination block volume.
+9. Verify hashes and apply ranges at identical logical offsets.
+10. Verify destination.
+11. Only then advance the authoritative reference point and remove the old source reference point.
+
+The important word is **logical**. RCT offsets do not describe VHDX container-file offsets.
+
+## Destination storage
+
+For Ceph/RBD, `controller/proxmox.py` resolves an already mapped PVE block path when possible. Otherwise it maps the specific RBD image temporarily, applies the delta while the VM is stopped, then unmaps only the mapping it created.
 
 ## Network safety
 
-Before cutover, a destination VM may only boot when attached to an explicitly isolated VNet or with its NIC disconnected.
+The source and destination may share MAC/IP/hostname identity, so a migrated destination is unsafe on production networking while the source is live. `test_vnet` and `production_vnet` are required to be different.
 
-The controller must refuse a test boot on the selected production network while the source VM is still reported as running.
-
-## RCT boundary
-
-Hyper-V Resilient Change Tracking is a separate implementation milestone. A checkpoint differencing disk is not treated as a substitute for proper changed-block tracking. Until RCT/reference-point handling is proven, the controller may perform baseline operations but must report incremental synchronization as unavailable.
+No quarantine/test VNet is assumed by name. One must be deliberately created or selected before lab migration.

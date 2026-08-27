@@ -1,72 +1,54 @@
 # Hyper-V RCT design
 
-## Goal
+## Why reference points
 
-Use Hyper-V Resilient Change Tracking (RCT) and backup/reference-point primitives to synchronize only blocks changed since a known migration reference point.
+Windows Server 2016 and later expose a WMI backup model based on virtual-system reference points plus Resilient Change Tracking (RCT). A reference point provides a stable identifier for the VM backup state and per-disk RCT identifiers.
 
-## Non-goals
+`Msvm_VirtualSystemReferencePoint.VirtualDiskIdentifiers` and `ResilientChangeTrackingIdentifiers` are parallel arrays. hv2pve records them together and refuses to silently invent a disk association when the WMI resource cannot be resolved.
 
-The following are explicitly not considered a correct RCT implementation:
-
-- copying an `.avhdx` file and calling it incremental replication
-- merging checkpoint chains on a live production VM without a validated workflow
-- scanning an entire virtual disk every synchronization cycle when Hyper-V changed-block metadata is available
-
-## Required capabilities
-
-The Hyper-V side eventually needs operations equivalent to:
+## Reference-point lifecycle
 
 ```text
-CreateReferencePoint
-QueryChangedBlocks(reference-point)
-ReadChangedRanges
-AdvanceReferencePoint
-RemoveReferencePoint
+RP0 authoritative
+ |
+ | VM continues running
+ v
+create RP1
+ |
+ +-- export/query RP0 -> RP1 changes
+ |
+ +-- destination apply
+ |
+ +-- destination verify
+ |
+ v
+RP1 authoritative
+ |
+ +-- destroy RP0 only now
 ```
 
-The exact implementation will be selected after validation against the Hyper-V versions used for testing.
+The source-side `commit-sync.ps1` requires the exact new reference point ID before deleting the previous one.
 
-## State requirements
+## Consistency
 
-For each virtual disk, persist at minimum:
+Application-consistent reference points are preferred. Crash-consistent is an explicit fallback, not an invisible downgrade.
 
-- stable disk identity
-- source VHDX path
-- virtual size
-- current reference-point identifier
-- previous reference-point identifier
-- last successful sync timestamp
-- destination disk mapping
-- checksum/validation metadata where practical
+## WMI export path
 
-A reference point must not be advanced until all changed ranges for that synchronization have been durably applied to the destination.
+`ExportReferencePoint` is the conservative data path. Hyper-V compiles reference point data into an export. It is easier to use and supports remote scenarios, but Microsoft's documentation notes that it can create more data to transfer than the Win32 RCT approach.
 
-## Sync transaction
+## Win32 path
 
-Conceptually:
+The native helper uses `QueryChangesVirtualDisk`. It requires a local VHD handle opened for `VIRTUAL_DISK_ACCESS_GET_INFO` and returns changed logical ranges.
 
-```text
-source reference A
-      │
-      ├── query blocks changed since A
-      │
-      ▼
-transfer/apply changed ranges
-      │
-      ├── validate destination writes
-      │
-      ▼
-create/commit reference B
-      │
-      └── B becomes next sync baseline
-```
+The helper never writes into a VHDX container at those offsets. It attaches a frozen virtual disk read-only and reads the logical disk view instead.
 
-If transfer or apply fails, reference A remains authoritative and the operation can be retried.
+## Validation requirement
 
-## Cutover
+Before native RCT is enabled for a production migration, the lab must prove:
 
-The final sync runs only after the source is quiesced/stopped. No source writes are allowed between completion of the final changed-block query and destination activation.
-
-## Current implementation status
-
-Not implemented yet. Phase 1 deliberately provides discovery and production-checkpoint baseline tooling first so that the basic migration path can be proven before RCT code is allowed anywhere near a live VM.
+- WMI and Win32 query ranges agree for controlled writes
+- the frozen disk associated with the target reference point is the data actually read
+- a baseline + one or more deltas reproduces exact guest-disk hashes/known files
+- repeated syncs survive controller/source restart
+- a failed transfer does not advance reference-point state
