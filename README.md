@@ -126,7 +126,7 @@ On the migration appliance:
 git clone https://github.com/J3ST3L2/hv2pve.git
 cd hv2pve
 sudo ./install/install-appliance.sh
-./scripts/appliance-preflight.sh
+bash scripts/appliance-preflight.sh
 ```
 
 Import source baseline state:
@@ -161,6 +161,14 @@ hv2pve seed \
 ```
 
 The `vlan60` value above is only an example. Each migration must use the source VM's real production network.
+
+Read-only Ceph/RBD validation for a stopped disposable destination:
+
+```bash
+PVE_HOST=10.20.99.37 \
+PVE_IDENTITY_FILE=$HOME/.ssh/hv2pve_pve \
+bash scripts/ceph-volume-preflight.sh 104 scsi0
+```
 
 ## Hyper-V baseline quick start
 
@@ -214,7 +222,8 @@ The `J3ST3L2/ansible` repository owns infrastructure lifecycle for the migration
 - `playbooks/hv2pve-appliance.yml` for package installation, `/migrate` provisioning, and optional private-repository deployment;
 - `playbooks/hv2pve-check-test-vlan.yml` for read-only candidate isolated-VLAN validation;
 - Semaphore manifests for the appliance, disk expansion, and VLAN preflight;
-- `tools/sync_hv2pve_semaphore_templates.sh` to reconcile all hv2pve-related templates into Semaphore.
+- `tools/semaphore_login_and_sync_hv2pve.sh` for interactive one-command Semaphore login and template reconciliation;
+- CI that syntax-checks the hv2pve Ansible playbooks, manifests, and reconciliation helpers.
 
 The isolated test VNet itself is deliberately **not** hardcoded until a VLAN has been checked against the broader physical network. `vlan60` remains production/server networking and is refused as the current isolated-test choice.
 
