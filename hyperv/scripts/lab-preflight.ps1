@@ -16,6 +16,7 @@ $ErrorActionPreference = 'Stop'
 $checks = [System.Collections.Generic.List[object]]::new()
 $failures = 0
 $warnings = 0
+$cimSession = $null
 
 function Add-Check {
     param(
@@ -47,13 +48,34 @@ else {
     Add-Check -Name 'Administrator' -Status FAIL -Detail 'Run PowerShell as Administrator.'
 }
 
-$os = Get-CimInstance Win32_OperatingSystem
-$build = [int]$os.BuildNumber
-if ($build -ge 14393) {
-    Add-Check -Name 'Windows build' -Status PASS -Detail "$($os.Caption) build $build supports the Windows Server 2016 / Windows 10 generation of RCT APIs."
+$localNames = @('.', 'localhost', $env:COMPUTERNAME)
+if ($ComputerName -notin $localNames) {
+    try {
+        $cimSession = New-CimSession -ComputerName $ComputerName -ErrorAction Stop
+        Add-Check -Name 'CIM session' -Status PASS -Detail "Connected to $ComputerName"
+    }
+    catch {
+        Add-Check -Name 'CIM session' -Status FAIL -Detail $_.Exception.Message
+    }
 }
-else {
-    Add-Check -Name 'Windows build' -Status FAIL -Detail "$($os.Caption) build $build is older than the RCT API baseline (14393)."
+
+try {
+    $os = if ($cimSession) {
+        Get-CimInstance -CimSession $cimSession -ClassName Win32_OperatingSystem -ErrorAction Stop
+    }
+    else {
+        Get-CimInstance -ClassName Win32_OperatingSystem -ErrorAction Stop
+    }
+    $build = [int]$os.BuildNumber
+    if ($build -ge 14393) {
+        Add-Check -Name 'Windows build' -Status PASS -Detail "$($os.Caption) build $build supports the Windows Server 2016 / Windows 10 generation of RCT APIs."
+    }
+    else {
+        Add-Check -Name 'Windows build' -Status FAIL -Detail "$($os.Caption) build $build is older than the RCT API baseline (14393)."
+    }
+}
+catch {
+    Add-Check -Name 'Windows build' -Status FAIL -Detail $_.Exception.Message
 }
 
 $hyperVModule = Get-Module -ListAvailable -Name Hyper-V | Sort-Object Version -Descending | Select-Object -First 1
@@ -117,30 +139,42 @@ if ($vm) {
     }
 }
 
-try {
-    $rpClass = Get-CimClass -Namespace 'root/virtualization/v2' -ClassName 'Msvm_VirtualSystemReferencePointService' -ComputerName $ComputerName -ErrorAction Stop
-    if ($rpClass.CimClassMethods.ContainsKey('CreateReferencePoint')) {
-        Add-Check -Name 'WMI CreateReferencePoint' -Status PASS -Detail 'Msvm_VirtualSystemReferencePointService.CreateReferencePoint is available.'
+if ($ComputerName -in $localNames -or $cimSession) {
+    try {
+        $rpClass = if ($cimSession) {
+            Get-CimClass -CimSession $cimSession -Namespace 'root/virtualization/v2' -ClassName 'Msvm_VirtualSystemReferencePointService' -ErrorAction Stop
+        }
+        else {
+            Get-CimClass -Namespace 'root/virtualization/v2' -ClassName 'Msvm_VirtualSystemReferencePointService' -ErrorAction Stop
+        }
+        if ($rpClass.CimClassMethods.ContainsKey('CreateReferencePoint')) {
+            Add-Check -Name 'WMI CreateReferencePoint' -Status PASS -Detail 'Msvm_VirtualSystemReferencePointService.CreateReferencePoint is available.'
+        }
+        else {
+            Add-Check -Name 'WMI CreateReferencePoint' -Status FAIL -Detail 'CreateReferencePoint method is missing.'
+        }
     }
-    else {
-        Add-Check -Name 'WMI CreateReferencePoint' -Status FAIL -Detail 'CreateReferencePoint method is missing.'
+    catch {
+        Add-Check -Name 'WMI CreateReferencePoint' -Status FAIL -Detail $_.Exception.Message
     }
-}
-catch {
-    Add-Check -Name 'WMI CreateReferencePoint' -Status FAIL -Detail $_.Exception.Message
-}
 
-try {
-    $imageClass = Get-CimClass -Namespace 'root/virtualization/v2' -ClassName 'Msvm_ImageManagementService' -ComputerName $ComputerName -ErrorAction Stop
-    if ($imageClass.CimClassMethods.ContainsKey('GetVirtualDiskChanges')) {
-        Add-Check -Name 'WMI GetVirtualDiskChanges' -Status PASS -Detail 'Msvm_ImageManagementService.GetVirtualDiskChanges is available.'
+    try {
+        $imageClass = if ($cimSession) {
+            Get-CimClass -CimSession $cimSession -Namespace 'root/virtualization/v2' -ClassName 'Msvm_ImageManagementService' -ErrorAction Stop
+        }
+        else {
+            Get-CimClass -Namespace 'root/virtualization/v2' -ClassName 'Msvm_ImageManagementService' -ErrorAction Stop
+        }
+        if ($imageClass.CimClassMethods.ContainsKey('GetVirtualDiskChanges')) {
+            Add-Check -Name 'WMI GetVirtualDiskChanges' -Status PASS -Detail 'Msvm_ImageManagementService.GetVirtualDiskChanges is available.'
+        }
+        else {
+            Add-Check -Name 'WMI GetVirtualDiskChanges' -Status FAIL -Detail 'GetVirtualDiskChanges method is missing.'
+        }
     }
-    else {
-        Add-Check -Name 'WMI GetVirtualDiskChanges' -Status FAIL -Detail 'GetVirtualDiskChanges method is missing.'
+    catch {
+        Add-Check -Name 'WMI GetVirtualDiskChanges' -Status FAIL -Detail $_.Exception.Message
     }
-}
-catch {
-    Add-Check -Name 'WMI GetVirtualDiskChanges' -Status FAIL -Detail $_.Exception.Message
 }
 
 if (-not $NativeHelperPath) {
@@ -158,6 +192,10 @@ else {
     else {
         Add-Check -Name 'Native RCT helper' -Status WARN -Detail "Helper is not built at '$NativeHelperPath' and dotnet is not installed. WMI-path testing can still proceed."
     }
+}
+
+if ($cimSession) {
+    Remove-CimSession -CimSession $cimSession
 }
 
 $result = [ordered]@{
