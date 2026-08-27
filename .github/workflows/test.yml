@@ -16,6 +16,10 @@ jobs:
         run: python -m py_compile controller/*.py
       - name: Unit tests
         run: python -m unittest discover -s tests -v
+      - name: Parse shell scripts
+        run: |
+          set -e
+          find scripts -type f -name '*.sh' -print0 | xargs -0 -r -n1 bash -n
 
   powershell:
     runs-on: windows-latest
