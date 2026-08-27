@@ -1,15 +1,23 @@
 # Changelog
 
-## 0.2.0 - engineering/lab MVP
+## Unreleased
 
-- Added schema-v2 migration state machine with atomic writes and explicit safety transitions.
-- Added RCT reference-point creation/export and guarded reference-point cleanup.
-- Added WMI disk/RCT mapping and change-range query helpers.
-- Added native .NET 8 `QueryChangesVirtualDisk` helper and logical delta-bundle packer.
-- Added SHA-256 verified Linux delta writer.
-- Added Proxmox SSH backend, baseline seed, isolated test workflow, Ceph/RBD delta application, production activation, rollback isolation and closure workflow.
-- Added appliance/source install helpers.
-- Added Python tests, PowerShell parse CI, and native Windows build CI.
-- Added lab validation and operational documentation.
+### Added
 
-This release is intentionally labeled lab MVP until live Hyper-V RCT/reference-point and native capture semantics pass the documented validation gates.
+- Staged Hyper-V to Proxmox migration controller and atomic migration-state model.
+- Hyper-V discovery, production/RCT reference-point creation, baseline and incremental reference-point export tooling.
+- Native .NET 8 RCT helper wrapping `QueryChangesVirtualDisk`, read-only virtual-disk attachment, logical-range packing, and SHA-256 metadata.
+- WMI-vs-native RCT comparison harness for validating equivalent logical changed-range coverage on real Hyper-V hosts.
+- Proxmox baseline seed/import, isolated test workflow, Ceph/RBD logical delta application, production VNet activation, and rollback isolation.
+- Appliance, Hyper-V source, and read-only Ceph/RBD preflight scripts.
+- Live validation gate documentation covering baseline, three online delta cycles, cutover, and rollback rehearsal.
+- CI for Python, shell syntax, PowerShell parsing, and the native .NET RCT helper.
+
+### Safety
+
+- Source VMs are never automatically deleted.
+- Destination test boot is refused on the production VNet.
+- Delta application requires a stopped Proxmox destination.
+- Cutover requires isolated test validation, verified synchronization, exact-name authorization, and source shutdown.
+- Rollback stops and re-isolates the destination before the Hyper-V source can restart.
+- RCT logical offsets are never treated as VHDX container-file offsets.
