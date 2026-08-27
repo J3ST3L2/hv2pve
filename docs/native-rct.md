@@ -18,6 +18,21 @@ Hv2Pve.Rct pack   --source-raw \\.\PhysicalDriveN ...
 
 `pack` reads from the `\\.\PhysicalDriveN` object created by a read-only/no-drive-letter virtual disk attachment. Each logical range gets its own SHA-256 and the complete payload gets a SHA-256.
 
+## WMI versus native range validation
+
+Before the native data plane is trusted for migration, compare it with Hyper-V's WMI `GetVirtualDiskChanges` result for the same disk and RCT ID:
+
+```powershell
+.\hyperv\scripts\rct-compare.ps1 `
+  -DiskPath 'D:\VMs\LAB01\disk.vhdx' `
+  -RctId 'RCT-ID-FROM-REFERENCE-POINT' `
+  -OutputPath C:\hv2pve-state\rct-compare.json
+```
+
+The comparison intentionally normalizes both APIs by sorting and merging overlapping or adjacent ranges before evaluating them. API-specific range segmentation can differ while representing the same changed logical coverage. Validation fails when the normalized coverage differs.
+
+This comparison proves changed-range discovery only. It does **not** by itself prove that a particular frozen VHDX view contains the target reference point's data. That point-in-time pairing is a separate live validation gate before `pack` is allowed to feed a production migration.
+
 ## Delta bundle
 
 Metadata contains:
