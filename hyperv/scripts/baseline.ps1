@@ -15,7 +15,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-$modulePath = Join-Path $PSScriptRoot '..\HyperV2PVE.psm1'
+$modulePath = Join-Path $PSScriptRoot '..\HyperV2PVE.psd1'
 Import-Module $modulePath -Force
 
 $vmInfo = Get-HV2PVEVMInfo -VMName $VMName -ComputerName $ComputerName
