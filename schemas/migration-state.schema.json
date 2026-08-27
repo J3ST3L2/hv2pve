@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/J3ST3L2/hv2pve/schemas/migration-state.schema.json",
+  "title": "hv2pve migration state",
+  "type": "object",
+  "required": ["schema_version", "migration_id", "phase", "source", "baseline", "destination", "sync"],
+  "properties": {
+    "schema_version": {"type": "integer", "const": 1},
+    "migration_id": {"type": "string", "minLength": 1},
+    "phase": {
+      "type": "string",
+      "enum": [
+        "NEW",
+        "DISCOVERED",
+        "BASELINE_READY",
+        "SEEDED",
+        "TESTED",
+        "SYNCING",
+        "CUTOVER_READY",
+        "CUTOVER_IN_PROGRESS",
+        "CUTOVER_COMPLETE",
+        "ROLLED_BACK",
+        "CLOSED"
+      ]
+    },
+    "source": {"type": "object"},
+    "baseline": {"type": "object"},
+    "destination": {"type": "object"},
+    "sync": {
+      "type": "object",
+      "properties": {
+        "mode": {"type": "string"},
+        "rct_implemented": {"type": "boolean"},
+        "last_successful_sync_utc": {"type": ["string", "null"]}
+      }
+    },
+    "validation": {"type": "object"},
+    "created_at_utc": {"type": "string"},
+    "updated_at_utc": {"type": "string"}
+  },
+  "additionalProperties": true
+}
