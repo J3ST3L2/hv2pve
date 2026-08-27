@@ -29,17 +29,19 @@ LIVE HYPER-V VM
 
 **Engineering/lab MVP, not production-certified.**
 
-The repository now contains the complete control-plane skeleton and both supported RCT data-plane approaches:
+The repository now contains the control-plane skeleton and both supported RCT data-plane approaches:
 
 - Hyper-V discovery and Production/RCT reference-point creation.
 - WMI reference-point full and base-relative export.
 - RCT disk/reference mapping and change-range query helpers.
 - Native Windows `QueryChangesVirtualDisk` helper for efficient changed-range discovery.
+- A WMI-vs-native RCT comparison harness that normalizes range segmentation before comparing logical changed-block coverage.
 - A delta bundle format that reads logical guest-disk ranges from a read-only attached virtual disk, hashes them, transports them, and applies them to the destination logical block device.
 - Proxmox baseline seed, isolated test start/stop, Ceph/RBD delta application, production-network activation, rollback isolation, and migration state tracking.
-- Python unit tests, PowerShell parser CI, and native .NET build CI.
+- Appliance and Hyper-V preflight harnesses for the live validation gates.
+- Python unit tests, shell syntax CI, PowerShell parser CI, and native .NET build CI.
 
-What is **not** claimed yet is production validation. The WMI reference-point method shapes and native RCT capture semantics must be validated on a sacrificial Windows Server 2016+ Hyper-V VM before any irreplaceable workload is migrated. See [`docs/lab-validation.md`](docs/lab-validation.md).
+What is **not** claimed yet is production validation. The WMI reference-point method shapes and native RCT capture semantics must be validated on a sacrificial Windows Server 2016+ Hyper-V VM before any irreplaceable workload is migrated. See [`docs/live-validation.md`](docs/live-validation.md) and [`docs/lab-validation.md`](docs/lab-validation.md).
 
 ## Safety model
 
@@ -75,10 +77,12 @@ hv2pve/
 │   ├── HyperV2PVE.psd1
 │   └── scripts/
 │       ├── discover.ps1
+│       ├── lab-preflight.ps1
 │       ├── rct-baseline.ps1
 │       ├── rct-sync.ps1
 │       ├── rct-disk-map.ps1
 │       ├── rct-query.ps1
+│       ├── rct-compare.ps1
 │       ├── native-delta.ps1
 │       ├── commit-sync.ps1
 │       ├── cutover-source.ps1
@@ -86,6 +90,7 @@ hv2pve/
 │       └── send-artifact.ps1
 ├── native/Hv2Pve.Rct/         .NET 8 Win32 RCT helper
 ├── install/                    appliance/source build helpers
+├── scripts/                    appliance validation helpers
 ├── config/                     configuration example
 ├── schemas/                    migration-state schema
 ├── docs/                       design + operational runbooks
@@ -109,7 +114,9 @@ Hyper-V's WMI backup API can create an RCT reference point and export either a b
 
 The RCT offsets are **logical virtual-disk offsets**, not offsets in the VHDX container file. `native-delta.ps1` therefore attaches a frozen VHD/VHDX read-only and reads the returned ranges from `\\.\PhysicalDriveN`. Writing RCT ranges directly into VHDX file offsets corrupts the image.
 
-This native path is marked experimental until its exact frozen-disk/reference-point pairing is proven in the lab.
+`rct-compare.ps1` runs both the WMI and native query paths against the same disk/RCT ID, merges adjacent/overlapping ranges, and fails when the resulting logical coverage differs. Raw range counts do not need to match because the two APIs may segment equivalent changed regions differently.
+
+This native path remains experimental until its exact frozen-disk/reference-point pairing is proven in the lab.
 
 ## Controller quick start
 
@@ -119,6 +126,7 @@ On the migration appliance:
 git clone https://github.com/J3ST3L2/hv2pve.git
 cd hv2pve
 sudo ./install/install-appliance.sh
+./scripts/appliance-preflight.sh
 ```
 
 Import source baseline state:
@@ -159,6 +167,10 @@ The `vlan60` value above is only an example. Each migration must use the source 
 Run PowerShell elevated on the Hyper-V host:
 
 ```powershell
+.\hyperv\scripts\lab-preflight.ps1 `
+    -VMName 'TEST-VM' `
+    -OutputPath C:\hv2pve\preflight.json
+
 .\hyperv\scripts\discover.ps1 `
     -VMName 'TEST-VM' `
     -OutputPath C:\hv2pve\discovery.json
@@ -169,7 +181,16 @@ Run PowerShell elevated on the Hyper-V host:
     -StatePath D:\hv2pve-export\migration-state.json
 ```
 
-Do this first on a disposable test VM.
+After a controlled source change and a new reference point, compare WMI and native changed-range coverage:
+
+```powershell
+.\hyperv\scripts\rct-compare.ps1 `
+    -DiskPath 'D:\VMs\TEST-VM\disk.vhdx' `
+    -RctId 'RCT-ID-FROM-REFERENCE-POINT' `
+    -OutputPath C:\hv2pve\rct-compare.json
+```
+
+Do all of this first on a disposable test VM.
 
 ## Documentation
 
@@ -179,12 +200,23 @@ Do this first on a disposable test VM.
 - [Native RCT data plane](docs/native-rct.md)
 - [Proxmox seed/import](docs/proxmox-seed.md)
 - [Cutover and rollback](docs/cutover.md)
+- [Live validation gates](docs/live-validation.md)
 - [Lab validation matrix](docs/lab-validation.md)
 - [Operational runbook](docs/runbook.md)
 
 ## Companion infrastructure
 
-VM creation, appliance provisioning, Semaphore task templates, and the planned generic Proxmox disk-expansion playbook remain in `J3ST3L2/ansible`. `hv2pve` contains the migration application itself.
+The `J3ST3L2/ansible` repository owns infrastructure lifecycle for the migration appliance and now includes:
+
+- the generic Proxmox VM builder;
+- a dedicated `hv2pve - Create Appliance VM` Semaphore manifest with a 64 GiB OS disk and 128 GiB starting workspace disk;
+- `playbooks/proxmox-expand-vm-disk.yml` for grow-only disk expansion;
+- `playbooks/hv2pve-appliance.yml` for package installation, `/migrate` provisioning, and optional private-repository deployment;
+- `playbooks/hv2pve-check-test-vlan.yml` for read-only candidate isolated-VLAN validation;
+- Semaphore manifests for the appliance, disk expansion, and VLAN preflight;
+- `tools/sync_hv2pve_semaphore_templates.sh` to reconcile all hv2pve-related templates into Semaphore.
+
+The isolated test VNet itself is deliberately **not** hardcoded until a VLAN has been checked against the broader physical network. `vlan60` remains production/server networking and is refused as the current isolated-test choice.
 
 ## References
 
